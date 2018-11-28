@@ -6,7 +6,9 @@
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
-import java.util.*;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 
 public class Messages
         extends Frame
@@ -26,11 +28,17 @@ public class Messages
 
     private final static int sleepTime = 2000; // ms, 2s between checks
 
-    Messages(String id, Notifications n) {
+    private Socket socket;
+    private static Checkbox onlineStatus;
+    Users users;
+
+    Messages(String id, Notifications n, Users u) {
         super(id + " : messages"); // call the Frame constructor
         this.id = id;
+        this.users = u;
 
         notifications = n;
+
 
     /*
      * The AWT code below lays out the widgets as follows.
@@ -71,6 +79,8 @@ public class Messages
         p = new Panel();
         p.add(new Label("Type here: "));
         p.add(input);
+        onlineStatus = new Checkbox("Online");
+        p.add(onlineStatus);
         add(p); // to this Frame
 
         // This is a separate Frame -- appears in a separate OS window
@@ -80,7 +90,7 @@ public class Messages
         p.add(messages);
         add(p); // to this Frame
 
-        // This obect handles window events (clicks) ...
+        // This object handles window events (clicks) ...
         addWindowListener(this);
         // ... and actions for input (typing)
         input.addActionListener(this);
@@ -119,9 +129,10 @@ public class Messages
     public void windowOpened(WindowEvent we) {
     }
 
-    /*
+    /**
      * ActionListener method - required.
-     * Text input from user - to transmit on the network.
+     * When the user enters text into the textbox of the messaging GUI, this method checks that the text is in the
+     * correct format, then attempts to send the message to the user specified.
      */
     @Override
     public void actionPerformed(ActionEvent ae) {
@@ -147,65 +158,85 @@ public class Messages
             return;
         }
 
-        String m = id + ":" + f[1]; // senders id in outgoing message
-        MessageCheckerCommon.tx_message(m);
 
-        String s = "<- tx " + f[0] + " : " + f[1] + "\n"; // mark outgoing messages - for demo purposes
+        String s = "<- tx " + f[0] + " : " + f[1] + "\n"; // mark outgoing messages
         messages.insert(s, 0); // top of TextArea
-        notifications.notify("Message sent to: " + f[0]); // for demo purposes
+        sendMessage(f[0].trim(), f[1]);
 
         input.setText(""); // make sure TextField is empty
     }
 
-    /*
-     * Runnable method - required.
-     * Incoming messages - received from the network.
+    /**
+     * This is the runnable method required by the runnable interface.
+     *
+     * It listens on a ServerSocket for incoming connections, checks the message to see that it is coming from a user
+     * that has been discovered by the users class and then displays it on the GUI
      */
     @Override
     public void run() {
-        while (true) {
-            ArrayList<String> rx = MessageCheckerCommon.rx_messages();
 
-            for (int r = 0; r < rx.size(); ++r) {
-                String m = rx.get(r);
-
-                m = m.trim();
-                if (m.length() > 0) {
-
-                    // message format is
-                    // sender:message
-                    String[] f = m.split(":");
-
-                    // This is not the best way to check the message format!
-                    // For demo purposes only.
-                    if (f == null || f.length != 2 ||
-                            f[0].length() < 1 || f[1].length() < 1) {
-                        notifications.notify("rx: Bad string received.");
-                        continue;
-                    }
-                    f[0] = f[0].trim();
-                    f[1] = f[1].trim();
-
-                    if (f[0].length() < 1 || f[1].length() < 1) {
-                        notifications.notify("rx: Bad string received.");
-                        continue;
-                    }
-
-                    notifications.notify("Received a message from: " + f[0]);
-                    String s = "-> rx " + f[0] + " : " + f[1] + "\n";
-                    messages.insert(s, 0);
-
-                } //m.length() > 0
-
-            } // for (r < rx.size())
-
+        while(true) {
             try {
-                Thread.sleep(sleepTime);
-            } // do not need to check constantly
-            catch (InterruptedException e) {
-            } // do not care
+                ServerSocket serverSocket = new ServerSocket(users.getPortNumber());
+                Socket socket = serverSocket.accept();
+                int oldSoTimeout = socket.getSoTimeout();
+                socket.setSoTimeout(100);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                String message = reader.readLine();
+                socket.setSoTimeout(oldSoTimeout);
+                if (!MessageDecoder.validMessage(message)) {
+                    System.out.println(message);
+                    throw new InvalidMessageFormatException();
+                }
+                String[] messagebits = message.split("]");
+                String user = messagebits[1].substring(1);
+                String text = messagebits[3].substring(1) + "\n";
+                if (users.getDestinationPortNumber(user) != null) { // Users are only stored if they are online
+                    notifications.notify("Message received from " + user);
+                    messages.insert(user + ": " + text, 0);
+                } else {
+                    System.out.println("User that is not online has sent you a message, message was discarded.");
+                }
+                    socket.close();
+                    socket = null;
 
-        } // while(true)
+            } catch (InvalidMessageFormatException e) {
+                System.out.println("Incoming message had bad format");
+            } catch (IOException e) {
+                socket = null;
+            }
+        }
+
+
+    }
+
+    /**
+     * This is used by the user class determine whether offline or online should be sent in the beacon.
+     * @return Whether the checkbox is currently checked or not.
+     */
+    public static boolean getOnlineStatus() {
+        return onlineStatus.getState();
+    }
+
+
+    /**
+     * Uses the username to get the associated address and port number and send a string to that socket.
+     * @param username
+     * @param text
+     */
+    private void sendMessage (String username, String text) {
+        try {
+            socket = new Socket(InetAddress.getByName(users.getAddress(username)), Integer.parseInt(users.getDestinationPortNumber(username)));
+            PrintWriter writer = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()));
+            String message = "[" + MessageCheckerCommon.timestamp() +"][" + id + "][text][" + text.trim() + "]";
+            System.out.println(message);
+            writer.println(message);
+            writer.flush();
+            notifications.notify("Message sent to: " + username);
+        } catch ( IOException e) {
+            notifications.notify("Message failed to be sent to: " + username);
+            e.printStackTrace();
+        }
     }
 
 } // class Messages

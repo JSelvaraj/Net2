@@ -4,17 +4,21 @@
  */
 
 public class Main {
+    public static void main(String[] args) {
 
-  public static void main(String[] args)
-  {
-    String id;
 
-    if (args.length == 1) { id = args[0]; }
-    else { id = System.getProperty("user.name"); }
+        String id;
 
-    System.out.println("Using id: " + id);
+        if (args.length == 1) {
+            id = args[0];
+        } else {
+            id = System.getProperty("user.name");
+        }
 
-    MessageCheckerGUI m = new MessageCheckerGUI(id);
-    m.setVisible(true); // Make GUI visible.
-  }
+        System.out.println("Using id: " + id);
+
+        MessageCheckerGUI m = new MessageCheckerGUI(id);
+        m.setVisible(true); // Make GUI visible.
+    }
+
 }
